@@ -21,18 +21,14 @@
 #include <errno.h>
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
+#include <sys/resource.h>
 #include "SerTanaBenchmark.h"
-struct list{
-    int fd;
-    struct list *next;
-};
+
 
 
 /* values */
 volatile int timerexpired=0;
-int connections=0;
-int failed=0;
-long long bytes=0;
+
 int total=0;
 /* globals */
 int http10=1; /* 0 - http/0.9, 1 - http/1.0, 2 - http/1.1 */
@@ -74,7 +70,6 @@ int perconnumrest;
 
 static const struct option long_options[]=
 {
- {"keepalive",no_argument,&keepalive,1},
  {"numthreads",required_argument,NULL,'t'},
  {"help",no_argument,NULL,'?'},
  {"http09",no_argument,NULL,'9'},
@@ -91,11 +86,11 @@ static const struct option long_options[]=
  {NULL,0,NULL,0}
 };
 
-static void benchcore();
+
 void benchcore2();
 static int  bench(void);
 static void build_request(const char *url);
-
+static void test();
 static void alarm_handler(int signal)// DNS Query may time out but
                                      // gethostbyname_r() can't do anything
 {
@@ -107,7 +102,6 @@ static void usage(void)
 {
    fprintf(stderr,
     "SerTanaBench [option]... URL\n"
-    "  -k|--keepalive           keepalive of Http.\n"
     "  -t|--threads             Number of threads. Default one.\n"
     "  -c|--clients <n>         Run <n> HTTP concurrent connections at once. Default one.\n"
     "  -r|--Benchtim <s>        Run <n> HTTP time. Default30s.\n"
@@ -153,14 +147,21 @@ static int bulid_socket(const char *host, int clientPort)
 
 static int Socket(const char *host, int clientPort)
 {
-    int sock;
+    int sock,ret;
+    int option=1;
     struct timeval t;
+    struct tcp_info tcpinfo;
+    int tcpinfolen = sizeof(tcpinfo);
+    char buf[1500];
+
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0)
         return sock;
 
-   // fcntl(sock,F_SETFL,fcntl(sock,F_GETFL,0)|O_NONBLOCK); //do we need NonBlocking ?
+    ret = setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(const char *)&option,sizeof(option));
+
+    //fcntl(sock,F_SETFL,fcntl(sock,F_GETFL,0)|O_NONBLOCK); //do we need NonBlocking ?
 
     (void)t;
     t.tv_sec  = 5;
@@ -171,55 +172,11 @@ static int Socket(const char *host, int clientPort)
     setsockopt(sock,SOL_SOCKET,SO_RCVTIMEO,&t,sizeof(t));//set the timeout value of
                                                          //the receive operation of the socket
 
-
-    int ret = connect(sock, (struct sockaddr *)&ad, sizeof(ad));
-
-    if (ret < 0)
-    {
-      char *p = strerror(ret);
-
-      if(errno==EINPROGRESS)
-      {
-          struct tcp_info tcpinfo;
-          int tcpinfolen = sizeof(tcpinfo);
-          while(0)
-          {
-            getsockopt(sock,IPPROTO_TCP,TCP_INFO,&tcpinfo,(socklen_t *)&tcpinfolen);
-            if(tcpinfo.tcpi_state=TCP_ESTABLISHED)
-            {
-
-
-            }
-          }
-      }
-      else if (errno==EISCONN)//connected
-      {
-         (void)p;
-      }
-      else if (errno==ECONNREFUSED)//refused by host
-      {
-         (void)p;
-      }
-      else if(errno==ENETUNREACH)//cannot reach to host
-      {
-         (void)p;
-      }
-      else if(errno==EHOSTDOWN)//host is down
-      {
-         (void)p;
-      }
-
-      return -1;
-    }
     return sock;
 }
 
 
-#define atmoic_fetch_add(ptr,value) do{__sync_fetch_and_add((ptr),(value));}while(0)
-#define atmoic_fetch_sub(ptr,value) do{__sync_fetch_and_sub((ptr),(value));}while(0)
-#define atmoic_read(ptr) __sync_fetch_and_add((ptr),(0))
-#define atmoic_add_fetch(ptr,value)  __sync_add_and_fetch((ptr),(value))
-#define atmoic_set(ptr,value) __sync_lock_test_and_set((ptr),(value))
+
 
 int count=0;
 void countsocket()
@@ -237,10 +194,17 @@ int main(int argc, char *argv[])
     pthread_t *tid_vec;
     int opt=0;
     int options_index=0;
+    int allcon=0,allfailed=0;
+    long long allbytes=0;
 
 
+    struct rlimit limit;
+    limit.rlim_cur=10240;
 
+    if(setrlimit(RLIMIT_NOFILE,&limit)<0)
+    {
 
+    }
 
     printf("-------------------------------\n");
     printf("SerTanaWebBench");
@@ -250,12 +214,11 @@ int main(int argc, char *argv[])
        return 2;
     }
 
-    while((opt=getopt_long(argc,argv,"912Vkr:s:t:c:?h",long_options,&options_index))!=EOF )
+    while((opt=getopt_long(argc,argv,"912Vr:s:t:c:?h",long_options,&options_index))!=EOF )
     {
      switch(opt)
      {
       case  0 : break;
-      case 'k': keepalive=1;break;
       case 's': Total_Target=atoi(optarg);break;
       case '9': http10=0;break;
       case '1': http10=1;break;
@@ -306,7 +269,7 @@ int main(int argc, char *argv[])
      }
     printf("\n");
 
-    if(numthreads>50)
+    if(numthreads>100)
     {
        printf("Create so many threads is dangerous, so we exit");
        exit(2);
@@ -320,25 +283,27 @@ int main(int argc, char *argv[])
     printf("%d numthreads are created for connecting %d concurrent connections\n",numthreads,Con_Target);
     printf("%d total connections are trying to connect\n",Total_Target);
 
-     bench();
+    bench();
 
     perconnum = Con_Target / numthreads;
     perconnumrest = Con_Target % numthreads;
 
-
     tid_vec    = (pthread_t*)malloc(sizeof(pthread_t)*numthreads);
+
+    connections = (int*)malloc(sizeof(int)*numthreads);
+    failed      = (int*)malloc(sizeof(int)*numthreads);
+    bytes       = (long long*)malloc(sizeof(long long)*numthreads);
 
     for(i = 0;i < numthreads; i++)
     {
         int ret = 0;
-        ret = pthread_create(tid_vec + i, NULL,(void*)benchcore2, NULL);
+        ret = pthread_create(tid_vec + i, NULL,(void*)benchcore2, &i);
         if(0!=ret)
         {
            fprintf(stderr, "thread create error:%s\n",strerror(ret));
            exit(1);
         }
     }
-
     sa.sa_handler=alarm_handler;
     sa.sa_flags=0;
     if(sigaction(SIGALRM,&sa,NULL))
@@ -357,6 +322,9 @@ int main(int argc, char *argv[])
            fprintf(stderr, "thread join error:%s\n",strerror(ret));
            exit(1);
         }
+        allcon    += *(connections+i);
+        allfailed += *(failed+i);
+        allbytes  += *(bytes+i);
     }
     gettimeofday(&t2,NULL);
 
@@ -364,10 +332,10 @@ int main(int argc, char *argv[])
 
     printf("\nTotal connections are %d, receive %d bytes\nSuccessful connection number rate is %d/sec\nTotal requests: %d susceed, %d failed, and %d sec is used to complete the task \n",
               (int)((total)),
-              (int)(bytes),
-              (int)(connections/(float)dts),
-              connections,
-              failed,
+              (int)(allbytes),
+              (int)(allcon/(float)dts),
+              allcon,
+              allfailed,
               dts);
 
 
@@ -464,19 +432,7 @@ void build_request(const char *url)
          strcat(request,"\r\n");
      }
 
-     //if(http10>1)
-
-
-     if(keepalive)
-     {
-       strcat(request,"Connection: Keep-Alive\r\n");
-     }
-     else
-     {
-       strcat(request,"Connection: close\r\n");
-     }
-
-
+     strcat(request,"Connection: close\r\n");
      /* add empty line at end */
      if(http10>0) strcat(request,"\r\n");
      // printf("Req=%s\n",request);
@@ -495,6 +451,7 @@ static int bench(void)
     exit(1);
   }
 
+  //test();
   /* check avaibility of target server */
   i=Socket(host,proxyport);
 
@@ -508,142 +465,6 @@ static int bench(void)
   return i;
 }
 
-
-void benchcore()
-{
-   while(start==0);
-
-   int *Soqueue=(int *)malloc(sizeof(int)*perconnum);
-   struct list* fdlist=(struct list*)malloc(sizeof(struct list));
-   //fdlist->fd=-1;
-   struct list* head  = fdlist;
-   const int port  = proxyport;
-   const char *req = request  ;
-   int rlen;
-   char buf[1500];
-   int s,i;
-
-
-   rlen=strlen(req);
-
-   nexttry:while(1)
-   {
-      if(timerexpired)
-      {
-        if(atmoic_read(&failed)>0)
-         {
-           atmoic_fetch_add(&failed,1);
-         }
-           break;
-      }
-
-      atmoic_set(&total,failed+connections);
-
-      //atmoic_add_fetch(&total,failed+connections)
-     if(atmoic_read(&total)< Total_Target)
-      {
-        if(atmoic_read(&connections)> Con_Target)
-        {         
-          if(NULL==head)
-          {
-             continue;
-          }
-          int ret = close(head->fd);
-          if(0!=ret)
-          {
-             // atmoic_fetch_add(&failed,1);
-            //  atmoic_fetch_sub(&connections,1);
-          }
-
-          struct list*_th=head;
-          head = head->next;
-          free(_th);
-        }
-      }
-      else
-      {
-         break;
-         //return ;
-      }
-
-     s=Socket(host,port);
-
-     if(s<0)
-     {
-       atmoic_fetch_add(&failed,1);
-       continue;
-     }
-
-     if(rlen!=write(s,req,rlen))//it seems not very strict, but rlen is small (65)
-     {
-       atmoic_fetch_add(&failed,1);
-       close(s);
-       continue;
-     }
-
-     if(http10==0)
-     if(shutdown(s,1))
-     {
-       atmoic_fetch_add(&failed,1);
-       close(s);
-       continue;
-     }
-
-      /* read all available data from socket */
-     while(1)
-     {
-       if(timerexpired)
-         break;
-
-        i=read(s,buf,1500);
-        /* fprintf(stderr,"%d\n",i); */
-        if(i<0)
-        {
-          atmoic_fetch_add(&failed,1);
-           //failed++;
-          close(s);
-          goto nexttry;
-        }
-        else
-        if(i==0) break;
-        else
-       atmoic_fetch_add(&bytes,i);
-           //  bytes+=i;
-     }
-
-/*
-    if(close(s))
-    {
-       //failed++;
-       atmoic_fetch_add(&failed,1);
-       continue;
-    }
-*/
- atmoic_fetch_add(&connections,1);
-
-   // connections++;
-
-   struct list* newlist=(struct list*)malloc(sizeof(struct list));
-   newlist->fd=s;
-   newlist->next=NULL;
-   fdlist->next=newlist;
-   fdlist=newlist;
-  }//nexttry
-
-   while(head)
-   {
-     struct list*_th=head;
-     int ret = close(head->fd);
-     if(0!=ret)
-     {
-
-     }
-     head = head->next;
-     free(_th);
-   }
- return ;
-}
-
 struct epresult
 {
     int fd;
@@ -654,226 +475,224 @@ void ClearState(int *queue,int length,int sockfd,unsigned char* bitmap,unsigned 
 int  GetState(int *queue,int length,int sockfd,unsigned char* bitmap) ;
 void SetState(int *queue,int length,int sockfd,unsigned char* bitmap);
 
-void benchcore2()
+
+void DelandCre(struct Socknode *socknode,struct rb_root *socktree)
 {
-    int i    =  0 ;
-    int sock = -1 ;
-    int ret  ;
+   int sock,option=1;
+
+   if(socknode)
+   {
+     rb_erase(&socknode->node,socktree);
+   }
+   else
+   {
+     wait_for_debug();
+   }
+next:
+   while((sock = socket(AF_INET, SOCK_STREAM, 0))<0);
+   fcntl(sock,F_SETFL,fcntl(sock,F_GETFL,0)|O_NONBLOCK);//NON_BLOCKING sockfd
+   setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(const char *)&option,sizeof(option));
+   if(connect(sock, (struct sockaddr *)&ad, sizeof(ad))<0)
+   {
+      if(errno!=EINPROGRESS&&errno!=EISCONN)
+       goto next;
+   }
+   socknode->sockfd = sock;
+   socknode->bitmap = 0;
+
+   my_insert(socktree,socknode);//insert into rbtree;
+}
+
+void benchcore2(void *arg)
+{
+    int i    =  0 ,wrfin = 0 ,option=1,threadid = *(int *)arg,_cnt=0;
+    int sock =-1;
+    int ret ,rlen=strlen(request);
+
+    *(connections + threadid)=0;
+    *(failed + threadid)=0;
+    *(bytes + threadid)=0;
+
+    struct rb_root   socktree = RB_ROOT;
+    struct rb_node  *node;
+    struct Socknode *socknode;
 
     int epollfd  = epoll_create(EPOLL_CLOEXEC);if(epollfd<0)wait_for_debug();
-    int *Soqueue = (int *)malloc(sizeof(int)*perconnum);
-    unsigned char* conbitmap = (unsigned char *)malloc(sizeof(unsigned char)*perconnum/8+1);
-    unsigned char* wribitmap = (unsigned char *)malloc(sizeof(unsigned char)*perconnum/8+1);
-    unsigned char* reabitmap = (unsigned char *)malloc(sizeof(unsigned char)*perconnum/8+1);
-
     int epollret;
     struct epoll_event  event;
     struct epoll_event* eventresult= (struct epoll_event*)malloc(sizeof(struct epoll_event)*perconnum);
     struct epoll_event _tmpevt;
     struct epresult   * eprst;
+    (void)eprst;
     char   buf[1500];
-    event.events = EPOLLIN | EPOLLET | EPOLLOUT | EPOLLRDHUP;
-
+    event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP| EPOLLERR;
 
     for(i = 0; i < perconnum; i++)
-    {
+    {     
        while((sock = socket(AF_INET, SOCK_STREAM, 0))<0);
-           *(Soqueue+i) = sock;
 
+       socknode =  (struct Socknode *)malloc(sizeof(struct Socknode));
+       socknode->sockfd = sock;
+       socknode->bitmap = 0;
        fcntl(sock,F_SETFL,fcntl(sock,F_GETFL,0)|O_NONBLOCK);//NON_BLOCKING sockfd
-    }
-
-    QuickSort(Soqueue,i);
-
-    for(i = 0; i < perconnum/8 +1; i++)
-    {
-       *(conbitmap+i)=*(wribitmap+i)=*(reabitmap+i)=0;
+       setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(const char *)&option,sizeof(option));
+       my_insert(&socktree,socknode);//insert into rbtree;
     }
 
     while(start==0);//wait for starting connect
 
-    for(i = 0; i < perconnum ;i++)
+    for (node = rb_first(&socktree); node; node = rb_next(node))
     {
-        sock = *(Soqueue+i) ;
-        ret  = connect(sock, (struct sockaddr *)&ad, sizeof(ad));
-
-        if(ret<0)
-        {
-            if(errno==EINPROGRESS)
-            {
-                struct tcp_info tcpinfo;
-                int tcpinfolen = sizeof(tcpinfo);
-                while(0)
-                {
-                  getsockopt(sock,IPPROTO_TCP,TCP_INFO,&tcpinfo,(socklen_t *)&tcpinfolen);
-                  if(tcpinfo.tcpi_state=TCP_ESTABLISHED)
-                  {
-
-
-                  }
-                }
-            }
-            else if (errno==EISCONN)//connected
-            {
-                SetState(Soqueue,perconnum,sock,conbitmap);
-            }
-            else
-            {
-                //failed++;
-            }
-            /*
-            else if (error==ECONNREFUSED)//refused by host
-            {
-            }
-            else if(error==ENETUNREACH)//cannot reach to host
-            {
-            }
-            else if(error==EHOSTDOWN)//host is down
-            {
-
-            }
-            */
-        }
-        else
-        {
-           SetState(Soqueue,perconnum,sock,conbitmap);
-        }
-
-        event.data.fd = sock;
-        epollret   = epoll_ctl(epollfd,EPOLL_CTL_ADD,sock,&event);
-        if(epollret<0)
-        {
-           wait_for_debug();
-        }
+       socknode = rb_entry(node, struct Socknode, node);
+       sock     = socknode->sockfd;
+       ret  = connect(sock, (struct sockaddr *)&ad, sizeof(ad));
+       if(ret<0)
+       {
+           if(errno==EINPROGRESS||errno==EISCONN)
+           {
+              /*struct tcp_info tcpinfo; int tcpinfolen = sizeof(tcpinfo);
+              while(0)
+              {
+                getsockopt(sock,IPPROTO_TCP,TCP_INFO,&tcpinfo,(socklen_t *)&tcpinfolen);
+                if(tcpinfo.tcpi_state==TCP_ESTABLISHED);
+              }
+               */
+           }
+           else
+           {
+             *(failed+threadid)=*(failed+threadid)+1;
+              DelandCre(socknode,&socktree);
+              sock = socknode->sockfd;
+           }
+       }
+       event.data.fd = sock;
+       epollret   = epoll_ctl(epollfd,EPOLL_CTL_ADD,sock,&event);
+       if(epollret<0)
+       {
+          wait_for_debug();
+       }
+       _cnt++;
     }
-
+    int _cntwri=0;
     while(1)
     {
       epollret = epoll_wait(epollfd, eventresult, perconnum,-1);
       if(epollret < 0)
       {
-         wait_for_debug();
+         int e=errno;
+         (void)e;
+         //wait_for_debug();
+         continue;
       }
       for(i = 0; i < epollret; i++)
-      {
-         _tmpevt =  eventresult[i];
-          eprst = (struct epresult*)(_tmpevt.data.ptr);
+      {                 
+          _tmpevt  =  eventresult[i];
+          sock     =  _tmpevt.data.fd;
+          eprst    =  (struct epresult*)(_tmpevt.data.ptr);
+          socknode =  my_search(&socktree,sock);
 
-         if(_tmpevt.events & (EPOLLERR|EPOLLRDHUP|EPOLLHUP))// socket is closed by host, socket is hup
+         if(_tmpevt.events & (EPOLLERR|EPOLLHUP))// socket is closed by host, socket is hup
          {
-            //failed++;
-            ClearState(Soqueue, perconnum, _tmpevt.data.fd,conbitmap,wribitmap,reabitmap);
-            connect(_tmpevt.data.fd, (struct sockaddr *)&ad, sizeof(ad));
-         }
-         if(_tmpevt.events & EPOLLIN)
-         {
-            ret = read(_tmpevt.data.fd,buf,1500);
-            if(ret==0)
-            {
-
-            }
-            else if(ret<0)
-            {
-              //failed++;
-              ClearState(Soqueue, perconnum, _tmpevt.data.fd,conbitmap,wribitmap,reabitmap);
-              connect(_tmpevt.data.fd, (struct sockaddr *)&ad, sizeof(ad));
-            }
-            else
-            {
-
-
-            }
-            //connections++;
+             *(failed+threadid)=*(failed+threadid)+1;
+             close(sock);
+             goto nexttry;
          }
          if(_tmpevt.events& EPOLLOUT)
          {
-
+            wrfin = socknode->bitmap;
+            ret   = write(sock,request + wrfin,rlen-wrfin);
+            if(ret < 0) //error
+            {
+               *(failed+threadid)=*(failed+threadid)+1;
+               close(sock);
+            }
+            else if (rlen==ret+wrfin)// write finish
+            {
+               event.data.fd = sock;
+               event.events  = EPOLLIN | EPOLLRDHUP| EPOLLERR;
+               epoll_ctl(epollfd,EPOLL_CTL_MOD,sock,&event);
+               socknode->bitmap = rlen;
+               continue;
+            }
+            else
+            {
+               socknode->bitmap = ret+wrfin;
+               continue;
+            }
          }
-      }
-    }
+         if(_tmpevt.events & EPOLLIN)
+         {
+            if(socknode->bitmap != rlen)
+            {
+              int e = errno;
+              (void)e;
+              wait_for_debug();
+            }
+            ret = read(sock,buf,1500);
+            if(ret==0)
+            {
+              if(close(sock)!=0)
+              {
+                *(failed+threadid)=*(failed+threadid)+1;
+              }
+              else
+              {
+                *(connections+threadid)=*(connections+threadid)+1;
+              }
+            }
+            else if(ret<0)
+            {        
+               *(failed+threadid)=*(failed+threadid)+1;
+               close(sock);
+            }
+            else
+            {
+               *(bytes+threadid)=*(bytes+threadid)+ret;
+               continue;
+            }
+         }
+nexttry:
+         event.data.fd = sock;
+        // epoll_ctl(epollfd,EPOLL_CTL_DEL,sock,&event);
+        // close(fd) causes fd removed from all epoll sets automatically
+         DelandCre(socknode,&socktree);
+         event.data.fd=socknode->sockfd;
+         event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP| EPOLLERR;
+         epoll_ctl(epollfd,EPOLL_CTL_ADD,socknode->sockfd,&event);
+      }//for(i = 0; i < epollret; i++)
+
+
+      if(0
+         // ||atmoic_add_fetch(&total,*(failed +threadid)+*(connections+threadid))>Total_Target
+          ||timerexpired==1
+         )
+          break;
+    }//while(1);
+
+
     close(epollfd);
-    free(Soqueue);
-    free(conbitmap);
-    free(wribitmap);
-    free(reabitmap);
+    return;
 }
 
-void _qsort(int *array, int ii, int jj)
+static void test()
 {
+    int epollfd  = epoll_create(EPOLL_CLOEXEC);if(epollfd<0)wait_for_debug();
+    int epollret;
+    struct epoll_event  event;
+    int sock=  socket(AF_INET, SOCK_STREAM, 0);
+    event.data.fd = sock;
+    event.events =  EPOLLIN | EPOLLET | EPOLLOUT | EPOLLRDHUP;
+    struct epoll_event* eventresult= (struct epoll_event*)malloc(sizeof(struct epoll_event)*1);
 
-    int i,j,temp,p;
-    if(ii<jj)
+
+    connect(sock, (struct sockaddr *)&ad, sizeof(ad));
+    epollret     =  epoll_ctl(epollfd,EPOLL_CTL_ADD,sock,&event);
+
+    epollret = epoll_wait(epollfd, eventresult,1,-1);
+    if(epollret>0)
     {
-        p=i=ii;j=jj;temp=array[i];
-        while(i<j)
-        {
-            while(i<j&&array[p]<=array[j])
-                j--;
-            temp     = array[p];
-            array[p] = array[j];
-            array[j] = temp;
 
-            while(i<j&&array[i]<=array[p])
-                i++;
-            temp     = array[p];
-            array[p] = array[i];
-            array[i] = temp;
-        }
-        _qsort(array,ii,i-1);
-        _qsort(array,i+1,jj);
+
     }
 
-}
-
-void QuickSort(int *array,int length)
-{
-   _qsort(array,0,length-1);
-}
-int FindIndex(int *array,int length, int sockfd)
-{
-    int start = 0;
-    int end   = length - 1 ;
-    int mid   = (start+end)/2;
-
-    while(array[mid]!=sockfd)
-    {
-        if(array[mid]>sockfd)
-            end = mid - 1;
-        else
-           start = mid + 1;
-
-        if(end<start)
-          return -1;
-
-        mid = (start + end )/2;
-    }
-    return mid;
-}
-
-int GetState(int *queue,int length,int sockfd,unsigned char* bitmap)
-{
-    int index = FindIndex(queue,length,sockfd) ;
-    int indexhigh = index/8;
-    int indexlow  = index%8;
-
-    return (*(bitmap+indexhigh))&(1<<indexlow);
-}
-
-void SetState(int *queue,int length,int sockfd,unsigned char* bitmap)
-{
-    int index = FindIndex(queue,length,sockfd) ;
-    int indexhigh = index/8;
-    int indexlow  = index%8;
-
-     *(bitmap+indexhigh)&=~(1<<indexlow);
-}
-void ClearState(int *queue,int length,int sockfd,unsigned char* bitmap1,unsigned char* bitmap2,unsigned char* bitmap3)
-{
-    int index = FindIndex(queue,length,sockfd) ;
-    int indexhigh = index/8;
-    int indexlow  = index%8;
-
-    *(bitmap1+indexhigh)&=~(1<<indexlow);
-    *(bitmap2+indexhigh)&=~(1<<indexlow);
-    *(bitmap3+indexhigh)&=~(1<<indexlow);
 }

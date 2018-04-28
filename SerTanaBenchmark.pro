@@ -16,7 +16,9 @@ TEMPLATE = app
 
 
 SOURCES += \
-    SerTanaBenchmark.c
+    SerTanaBenchmark.c \
+    rbtree.c
 
 HEADERS += \
-    SerTanaBenchmark.h
+    SerTanaBenchmark.h \
+    rbtree.h

@@ -21,6 +21,6 @@ tar:   clean
 	cp -p Makefile SerTanaBenchmark.c $(TMPDIR) 
 	-cd $(TMPDIR) && cd .. && tar cozf SerTanaBenchmark-$(VERSION).tar.gz SerTanaBenchmark-$(VERSION)
 
-SerTanaBenchmark.o:	SerTanaBenchmark.c Makefile
+ 
 
 .PHONY: clean install all tar
