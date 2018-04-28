@@ -778,6 +778,11 @@ void benchcore2()
               ClearState(Soqueue, perconnum, _tmpevt.data.fd,conbitmap,wribitmap,reabitmap);
               connect(_tmpevt.data.fd, (struct sockaddr *)&ad, sizeof(ad));
             }
+            else
+            {
+
+
+            }
             //connections++;
          }
          if(_tmpevt.events& EPOLLOUT)
