@@ -6,7 +6,7 @@ VERSION=0.1
 TMPDIR=/tmp/SerTanaBenchmark-$(VERSION)
  
 SerTanaBenchmark:   
-	$(CC) -g SerTanaBenchmark.c -o SerTanaBenchmark $(LFLAGS)  $(LIBS)  
+	$(CC)  SerTanaBenchmark.c rbtree.c -o SerTanaBenchmark $(LFLAGS)  $(LIBS)  
 
 install: SerTanaBenchmark
 	install -s SerTanaBenchmark  $(PREFIX)/bin	

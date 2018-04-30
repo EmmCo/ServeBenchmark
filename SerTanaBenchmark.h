@@ -13,13 +13,12 @@ struct Socknode {
     char         bitmap;
 };
 
-
 static int *connections ;
 static int *failed      ;
 static long long *bytes ;
+static int *thread;
 
-
-#define wait_for_debug() do{}while(1)
+#define wait_for_debug() do{}while(0)
 
 #define atmoic_fetch_add(ptr,value) do{__sync_fetch_and_add((ptr),(value));}while(0)
 #define atmoic_fetch_sub(ptr,value) do{__sync_fetch_and_sub((ptr),(value));}while(0)
@@ -72,8 +71,5 @@ int my_insert(struct rb_root *root, struct Socknode *data)
 
     return 1;
 }
-
-
-
 
 #endif // SERTANABENCHMARK_H
