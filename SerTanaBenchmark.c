@@ -279,12 +279,14 @@ int main(int argc, char *argv[])
     {
       printf("\n---------WARNING ! ! !---------\n");
       printf("Can't read the number of fd of the process\n");
+      printf("--------------------------------\n");
       exit(2);
     }
     if(limit.rlim_cur < Con_Target+3)
     {
       printf("\n---------WARNING ! ! !---------\n");
       printf("The number of fd of the process is %d, less than concurrent connections %d\n",(unsigned int)limit.rlim_cur,Con_Target);
+      printf("--------------------------------\n");
       slimit.rlim_cur = Con_Target+3;
       if(setrlimit(RLIMIT_NOFILE,&slimit)<0)
       {
@@ -302,13 +304,25 @@ int main(int argc, char *argv[])
       exit(2);
     }
  going:
+    perconnum = Con_Target / numthreads;
+    perconnumrest = Con_Target % numthreads;
+
+    if(perconnum==0)
+    {
+      perconnum  = 1;
+      numthreads = perconnumrest;
+      printf("\n---------WARNING ! ! !----------\n");
+      printf("Concurrent connections is smaller than the number of threads may be not a good idea\n");
+      printf("--------------------------------\n");
+    }
+    else
+    {
+
+    }
     printf("%d numthreads are created for connecting %d concurrent connections\n",numthreads,Con_Target);
     printf("%d total connections are trying to connect\n",Total_Target);
 
     bench();
-
-    perconnum = Con_Target / numthreads;
-    perconnumrest = Con_Target % numthreads;
 
     tid_vec    = (pthread_t*)malloc(sizeof(pthread_t)*numthreads);
 
