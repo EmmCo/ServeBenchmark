@@ -693,9 +693,9 @@ void benchcore2(void *arg)
               int e = errno;
               (void)e;
               //wait_for_debug();
-              *(failed+threadid)=*(failed+threadid)+1;
-              close(sock);
-              goto nexttry;
+              //*(failed+threadid)=*(failed+threadid)+1;
+              //close(sock);
+              //goto nexttry;
             }
             ret = read(sock,buf,1500);
             if(ret==0)
