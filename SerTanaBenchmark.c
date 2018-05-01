@@ -50,8 +50,6 @@ char *proxyhost=NULL;
 int benchtime=30;
 /* internal */
 
-
-
 char host[MAXHOSTNAMELEN];
 
 #define REQUEST_SIZE 2048
@@ -228,9 +226,9 @@ int main(int argc, char *argv[])
        return 2;
     }
 
-    if(Total_Target==0)  Total_Target = 1 ;
-    if(Con_Target==0)    Con_Target   = 1 ;
-    if(numthreads==0)    numthreads   = 1 ; //if user has not set the number of threads,there is only 1 thread
+    if(Total_Target<=0)  Total_Target = 1 ;
+    if(Con_Target<=0)    Con_Target   = 1 ;
+    if(numthreads<=0)    numthreads   = 1 ; //if user has not set the number of threads,there is only 1 thread
 
     /**/
     char *_temp=(char *) malloc(strlen(argv[optind])+2);
@@ -382,7 +380,6 @@ int main(int argc, char *argv[])
    printf("-------------------------------\n");
 
   // free(tid_vec);already freed by pthread_join.
-
    free(connections);free(failed);free(bytes);free(thread);
    return 0;
 }
@@ -473,7 +470,6 @@ void build_request(const char *url)
      /* add empty line at end */
      if(http10>0) strcat(request,"\r\n");
      // printf("Req=%s\n",request);
-
 }
 
 static int bench(void)
@@ -552,7 +548,7 @@ void benchcore2(void *arg)
     struct rb_root   socktree = RB_ROOT;
     struct rb_node  *node;
     struct Socknode *socknode;
-    struct Socknode *socknodelist=(struct Socknode *)malloc(sizeof(struct Socknode)*perconnum);
+    struct Socknode *socknodelist = (struct Socknode *)malloc(sizeof(struct Socknode)*perconnum);
 
     int epollfd  = epoll_create(EPOLL_CLOEXEC);if(epollfd<0)wait_for_debug();
     int epollret,ctlreturn;
@@ -593,7 +589,7 @@ void benchcore2(void *arg)
                 getsockopt(sock,IPPROTO_TCP,TCP_INFO,&tcpinfo,(socklen_t *)&tcpinfolen);
                 if(tcpinfo.tcpi_state==TCP_ESTABLISHED);
               }
-               */
+              */
            }
            else
            {
@@ -647,7 +643,7 @@ void benchcore2(void *arg)
             }
             else if (rlen==ret+wrfin)// write finish
             {
-                if(timerexpired)
+               if(timerexpired)
                     break;
                socknode->bitmap = rlen;
                event.data.fd = sock;
@@ -682,7 +678,10 @@ void benchcore2(void *arg)
             {
               int e = errno;
               (void)e;
-              wait_for_debug();
+              //wait_for_debug();
+              *(failed+threadid)=*(failed+threadid)+1;
+              close(sock);
+              goto nexttry;
             }
             ret = read(sock,buf,1500);
             if(ret==0)
@@ -749,10 +748,10 @@ nexttry:
       }//for(i = 0; i < epollret; i++)
 
       if(0
-         // ||atmoic_add_fetch(&total,*(failed +threadid)+*(connections+threadid))>Total_Target
-          ||timerexpired==1
-         )
+       // ||atmoic_add_fetch(&total,*(failed +threadid)+*(connections+threadid))>Total_Target
+          ||timerexpired)
           break;
+
     }//while(1);
 
     for (node = rb_first(&socktree); node; node = rb_next(node))
